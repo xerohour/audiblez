@@ -29,12 +29,12 @@ EVENTS = {
 
 border = 5
 
-
 class MainWindow(wx.Frame):
     def __init__(self, parent, title):
         screen_width, screen_h = wx.GetDisplaySize()
         self.window_width = int(screen_width * 0.6)
         super().__init__(parent, title=title, size=(self.window_width, self.window_width * 3 // 4))
+        self._bulk = False
         self.chapters_panel = None
         self.preview_threads = []
         self.selected_chapter = None
@@ -52,6 +52,30 @@ class MainWindow(wx.Frame):
         self.Centre()
         self.Show(True)
         if Path('../epub/lewis.epub').exists(): self.open_epub('../epub/lewis.epub')
+
+    def on_select_all(self, event):
+        for i, chap in enumerate(self.document_chapters):
+            if not self.table.IsItemChecked(i):
+                self.table.CheckItem(i)
+            chap.is_selected = True
+
+    def on_clear_all(self, event):
+        for i, chap in enumerate(self.document_chapters):
+            if self.table.IsItemChecked(i):
+                self.table.CheckItem(i, False)
+            chap.is_selected = False
+
+    def on_table_context(self, event):
+        indices = []
+        idx = self.table.GetFirstSelected()
+        while idx != -1:
+            indices.append(idx)
+            idx = self.table.GetNextSelected(idx)
+
+        for i in indices:
+            new_state = not self.table.IsItemChecked(i)
+            self.table.CheckItem(i, new_state)
+            self.document_chapters[i].is_selected = new_state
 
     def create_menu(self):
         menubar = wx.MenuBar()
@@ -428,10 +452,31 @@ class MainWindow(wx.Frame):
         self.splitter.Layout()
 
     def on_table_checked(self, event):
-        self.document_chapters[event.GetIndex()].is_selected = True
+        self._toggle_selection(event.GetIndex(), True)
 
     def on_table_unchecked(self, event):
-        self.document_chapters[event.GetIndex()].is_selected = False
+        self._toggle_selection(event.GetIndex(), False)
+
+    def _toggle_selection(self, clicked_idx, new_state):
+        if self._bulk:
+            return
+        self._bulk = True
+        try:
+            sel = []
+            idx = self.table.GetFirstSelected()
+            while idx != -1:
+                sel.append(idx)
+                idx = self.table.GetNextSelected(idx)
+
+            if clicked_idx not in sel:
+                sel.append(clicked_idx)
+
+            for i in sel:
+                if self.table.IsItemChecked(i) != new_state:
+                    self.table.CheckItem(i, new_state)
+                self.document_chapters[i].is_selected = new_state
+        finally:
+            self._bulk = False
 
     def on_table_selected(self, event):
         chapter = self.document_chapters[event.GetIndex()]
@@ -459,6 +504,7 @@ class MainWindow(wx.Frame):
         table.Bind(wx.EVT_LIST_ITEM_CHECKED, self.on_table_checked)
         table.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self.on_table_unchecked)
         table.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_table_selected)
+        table.Bind(wx.EVT_CONTEXT_MENU, self.on_table_context)
 
         for i, chapter in enumerate(self.document_chapters):
             auto_selected = chapter in good_chapters
@@ -468,6 +514,20 @@ class MainWindow(wx.Frame):
         title_text = wx.StaticText(panel, label=f"Select chapters to include in the audiobook:")
         sizer.Add(title_text, 0, wx.ALL, 5)
         sizer.Add(table, 1, wx.ALL | wx.EXPAND, 5)
+
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        select_all_btn = wx.Button(panel, label="✔️ Select all")
+        clear_all_btn  = wx.Button(panel, label="✖️ Clear all")
+
+        btn_sizer.Add(select_all_btn, 0, wx.RIGHT, 5)
+        btn_sizer.Add(clear_all_btn,  0)
+
+        select_all_btn.Bind(wx.EVT_BUTTON, self.on_select_all)
+        clear_all_btn.Bind(wx.EVT_BUTTON,  self.on_clear_all)
+
+        sizer.Add(btn_sizer, 0, wx.LEFT | wx.BOTTOM, 5)
+
         return panel
 
     def get_selected_voice(self):
