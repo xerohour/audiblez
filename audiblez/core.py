@@ -222,37 +222,53 @@ def gen_text(text, voice='af_heart', output_file='text.wav', speed=1, play=False
 
 
 def find_document_chapters_and_extract_texts(book):
-    """Returns every chapter that is an ITEM_DOCUMENT and enriches each chapter with extracted_text."""
-    document_chapters = []
-    for chapter in book.get_items():
-        if chapter.get_type() != ebooklib.ITEM_DOCUMENT:
+    """
+    Returns chapters that are ITEM_DOCUMENT in the order specified by the book spine,
+    and enriches each chapter object with extracted_text using the original logic.
+    """
+    ordered_chapters = []
+    # Create a mapping from item ID to the actual item object for quick lookup
+    items_by_id = {item.id: item for item in book.get_items()}
+
+    # Iterate through the spine, which defines the reading order
+    spine_index = 0 # Keep a separate counter for valid document chapters found in spine order
+    for item_id, _ in book.spine:
+        chapter = items_by_id.get(item_id)
+
+        # Skip if the item ID from spine doesn't exist or isn't a document
+        if chapter is None or chapter.get_type() != ebooklib.ITEM_DOCUMENT:
             continue
+
+        # Original text extraction logic:
         xml = chapter.get_body_content()
         soup = BeautifulSoup(xml, features='lxml')
         chapter.extracted_text = ''
         html_content_tags = ['title', 'p', 'h1', 'h2', 'h3', 'h4', 'li']
-        for text in [c.text.strip() for c in soup.find_all(html_content_tags) if c.text]:
-            if not text.endswith('.'):
-                text += '.'
-            chapter.extracted_text += text + '\n'
-        document_chapters.append(chapter)
-    for i, c in enumerate(document_chapters):
-        c.chapter_index = i  # this is used in the UI to identify chapters
-    return document_chapters
+        for text_element in soup.find_all(html_content_tags):
+             # Use .text and strip() like the original
+             text = text_element.text.strip() if text_element.text else ''
+             if text: # Only process if text is not empty after stripping
+                if not text.endswith('.'):
+                    text += '.'
+                chapter.extracted_text += text + '\n'
+        # --- End Original Text Extraction ---
+
+        # Assign the index based on the order of *document items found* in the spine
+        chapter.chapter_index = spine_index
+        ordered_chapters.append(chapter)
+        spine_index += 1 # Increment index only for valid document chapters added
+
+    # The list 'ordered_chapters' now contains ITEM_DOCUMENT chapters
+    # sorted according to their appearance in the EPUB spine.
+    # 'chapter_index' counts from 0 upwards for these ordered document chapters.
+    return ordered_chapters
 
 
-def is_chapter(c):
-    name = c.get_name().lower()
+
+
+def check_length(c):
     has_min_len = len(c.extracted_text) > 100
-    title_looks_like_chapter = bool(
-        'chapter' in name.lower()
-        or re.search(r'part_?\d{1,3}', name)
-        or re.search(r'split_?\d{1,3}', name)
-        or re.search(r'ch_?\d{1,3}', name)
-        or re.search(r'chap_?\d{1,3}', name)
-    )
-    return has_min_len and title_looks_like_chapter
-
+    return has_min_len
 
 def chapter_beginning_one_liner(c, chars=20):
     s = c.extracted_text[:chars].strip().replace('\n', ' ').replace('\r', ' ')
@@ -260,7 +276,7 @@ def chapter_beginning_one_liner(c, chars=20):
 
 
 def find_good_chapters(document_chapters):
-    chapters = [c for c in document_chapters if c.get_type() == ebooklib.ITEM_DOCUMENT and is_chapter(c)]
+    chapters = [c for c in document_chapters if c.get_type() == ebooklib.ITEM_DOCUMENT and check_length(c)]
     if len(chapters) == 0:
         print('Not easy to recognize the chapters, defaulting to all non-empty documents.')
         chapters = [c for c in document_chapters if c.get_type() == ebooklib.ITEM_DOCUMENT and len(c.extracted_text) > 10]
@@ -325,7 +341,7 @@ def create_m4b(chapter_files, filename, cover_image, output_folder):
     proc = subprocess.run([
         'ffmpeg',
         '-y',  # Overwrite output
-        
+
         '-i', f'{concat_file_path}',  # Input audio
         '-i', f'{chapters_txt_path}',  # Input chapters
         *cover_image_args,  # Cover image (if provided)
